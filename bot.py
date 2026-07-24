@@ -285,5 +285,5 @@ if __name__ == '__main__':
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=f"https://https://bot-v3-j7bq.onrender.com/{TOKEN}" # Ganti nanti setelah deploy di Render
+        webhook_url=f"https://bot-v3-j7bq.onrender.com/{TOKEN}" # Ganti nanti setelah deploy di Render
     )
