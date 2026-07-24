@@ -108,6 +108,7 @@ def build_score_keyboard(draft_poin, is_negative):
         ],
         [
             InlineKeyboardButton("100", callback_data="val_100"),
+            InlineKeyboardButton("500", callback_data="val_500"),
             InlineKeyboardButton("🔄 Reset", callback_data="reset_draft")
         ],
         [InlineKeyboardButton(f"✅ KONFIRMASI ({draft_poin:+d} Poin)", callback_data="confirm_score")],
