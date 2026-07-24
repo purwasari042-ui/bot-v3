@@ -1,3 +1,6 @@
+import os
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -6,7 +9,20 @@ from telegram.ext import (
     ContextTypes
 )
 
-# 10 Tingkat Gelar Kekalahan
+# --- 1. SETUP WEB SERVER FLASK AGAR RENDER AKTIF 24 JAM ---
+server = Flask(__name__)
+
+@server.route("/")
+def index():
+    return "Bot Remi RT/RW Aktif 24 Jam!", 200
+
+def run_flask():
+    # Render otomatis memberikan port lewat environment variable, default ke 10000
+    port = int(os.environ.get("PORT", 10000))
+    server.run(host="0.0.0.0", port=port)
+
+
+# --- 2. LOGIKA GAME BOT TELEGRAM ---
 GELAR_LIST = {
     0: "Aman",
     1: "RT (Rukun Tetangga)",
@@ -18,7 +34,7 @@ GELAR_LIST = {
     7: "Menteri",
     8: "Wakil Presiden",
     9: "Presiden",
-    10: "Tolol 👑"
+    10: "Sultan / Dewa Remi 👑"
 }
 
 games = {}
@@ -38,7 +54,6 @@ async def set_pemain(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     nama_pemain = context.args
     
-    # Validasi jumlah pemain: Minimal 3, Maksimal 4
     if not (3 <= len(nama_pemain) <= 4):
         await update.message.reply_text(
             "❌ Jumlah pemain harus *3 atau 4 orang*!\n"
@@ -160,9 +175,7 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             else:
                 game["draft_poin"] += val
                 
-        player_name = game["active_player"]
         keyboard = build_score_keyboard(game["draft_poin"], game["is_negative"])
-        
         try:
             await query.edit_message_reply_markup(reply_markup=keyboard)
         except Exception:
@@ -256,22 +269,17 @@ async def status_rtrw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         teks += f"• {p}: *{gelar}* (Total kalah: {count}x)\n"
     await update.message.reply_text(teks, parse_mode="Markdown")
 
-import os
-from flask import Flask
 
-# ... (simpan semua kode fungsi bot Anda di atas bagian ini seperti biasa) ...
-
-# Konfigurasi Flask untuk Uptime 24 Jam di Cloud
-server = Flask(__name__)
-
-@server.route("/")
-def index():
-    return "Bot Remi RT/RW Aktif 24 Jam!", 200
-
+# --- 3. EKSEKUSI UTAMA (MENJALANKAN FLASK & BOT BERSAMAAN) ---
 if __name__ == '__main__':
     TOKEN = "8854147147:AAFZ-NokjXUlvzPDhxaw4myHVBLpXPfS210"
-    PORT = int(os.environ.get("PORT", 5000))
     
+    # Jalankan server Flask di latar belakang agar Render mendeteksi port web yang aktif
+    t = threading.Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+    
+    # Jalankan bot Telegram dengan polling
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("pemain", set_pemain))
@@ -280,10 +288,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("status", status_rtrw))
     app.add_handler(CallbackQueryHandler(button_click_handler))
     
-    # Jalankan bot dengan polling secara bersamaan dengan web server
-    print("Bot Remi Interaktif & Web Server Berjalan...")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=f"https://bot-v3-j7bq.onrender.com/{TOKEN}" # Ganti nanti setelah deploy di Render
-    )
+    print("Bot Remi Interaktif & Web Server Render Berjalan...")
+    app.run_polling()
