@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest
 
-# --- 1. SETUP WEB SERVER FLASK (AGAR SERVER RENDER AKTIF 24 JAM) ---
+# --- 1. SETUP WEB SERVER FLASK (RENDER AKTIF 24 JAM) ---
 server = Flask(__name__)
 
 @server.route("/")
@@ -23,18 +23,14 @@ def run_flask():
 
 
 # --- 2. LOGIKA GAME BOT TELEGRAM ---
+# Gelar dibatasi maksimal level 5
 GELAR_LIST = {
     0: "Aman",
     1: "RT (Rukun Tetangga)",
     2: "RW (Rukun Warga)",
     3: "Lurah",
     4: "Camat",
-    5: "Walikota / Bupati",
-    6: "Gubernur",
-    7: "Menteri",
-    8: "Wakil Presiden",
-    9: "Presiden",
-    10: "TOLOL 👑"
+    5: "Walikota / Bupati 👑"
 }
 
 games = {}
@@ -46,7 +42,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/pemain A B C` atau `/pemain A B C D` : Daftarkan 3 hingga 4 pemain\n"
         "• `/input` : Buka menu tombol pemilihan pemain & skor\n"
         "• `/skor` : Lihat papan skor saat ini\n"
-        "• `/status` : Lihat riwayat gelar RT s/d Sultan\n"
+        "• `/status` : Lihat riwayat gelar RT s/d Walikota\n"
         "• `/reset` : Reset/hapus sesi permainan saat ini",
         parse_mode="Markdown"
     )
@@ -88,12 +84,13 @@ async def reset_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id in games and games[chat_id]["players"]:
         games[chat_id]["players"] = {}
+        games[chat_id]["history_kalah"] = {}
         games[chat_id]["active_player"] = None
         games[chat_id]["draft_poin"] = 0
         games[chat_id]["is_negative"] = False
         await update.message.reply_text(
             "🔄 *Permainan berhasil direset!*\n\n"
-            "Semua skor dan daftar pemain telah dikosongkan.\n"
+            "Semua skor dan riwayat kekalahan telah dikosongkan.\n"
             "Ketik `/pemain A B C` untuk memulai permainan baru.",
             parse_mode="Markdown"
         )
@@ -130,7 +127,7 @@ def build_score_keyboard(draft_poin, is_negative):
         ],
         [
             InlineKeyboardButton("100", callback_data="val_100"),
-            InlineKeyboardButton("500", callback_data="val_500"),  # TOMBOL 500
+            InlineKeyboardButton("500", callback_data="val_500"),
             InlineKeyboardButton("🔄 Reset", callback_data="reset_draft")
         ],
         [InlineKeyboardButton(f"✅ KONFIRMASI ({draft_poin:+d} Poin)", callback_data="confirm_score")],
@@ -155,7 +152,11 @@ def check_overtake_and_reset(old_scores, new_scores):
 
 async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # Respon instan tanpa delay
+    
+    try:
+        await query.answer()
+    except Exception:
+        pass
     
     chat_id = query.message.chat.id
     data = query.data
@@ -257,8 +258,12 @@ async def button_click_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         juara = max(game["players"], key=game["players"].get)
         
         papan = "📊 *PAPAN SKOR AKHIR RONDE* 📊\n" + "\n".join([f"• {p}: *{s}* poin" for p, s in game["players"].items()])
-        teks_tampil = f"✅ Pemain kalah dipilih secara manual: *{pecundang}*\n\n{papan}"
-        pesan_akhir = f"🎉 *GAME OVER!*\n🏆 Pemenang Putaran: *{juara}* ({game['players'][juara]} poin)\n💔 Kalah Putaran Ini (Manual): *{pecundang}* ({game['players'][pecundang]} poin)"
+        teks_tampil = f"👉 Penentuan pecundang dilakukan secara manual.\n\n{papan}"
+        pesan_akhir = (
+            f"🎉 *GAME OVER!*\n"
+            f"🏆 Pemenang Putaran: *{juara}* ({game['players'][juara]} poin)\n"
+            f"💔 Kalah Putaran Ini (Manual): *{pecundang}* ({game['players'][pecundang]} poin)"
+        )
         
         await finish_round(query, context, chat_id, teks_tampil, pesan_akhir, pecundang)
 
@@ -274,32 +279,52 @@ async def process_game_result(update: Update, context: ContextTypes.DEFAULT_TYPE
     papan = "📊 *PAPAN SKOR SAAT INI* 📊\n" + "\n".join([f"• {p}: *{s}* poin" for p, s in players.items()])
     teks_tampil = f"{notifikasi}\n\n{papan}"
     
+    # KONDISI 1: KALAH INSTAN (<= -500)
     if kalah_instan:
         pecundang = kalah_instan[0]
         history[pecundang] += 1
         pesan_akhir = f"💀 *GAME OVER!*\n*{pecundang}* menyentuh poin <= -500 ({players[pecundang]}) dan *LANGSUNG KALAH*!"
         await finish_round(query, context, chat_id, teks_tampil, pesan_akhir, pecundang)
         
+    # KONDISI 2: ADA PEMAIN MEMENUHI TARGET 500 POIN
     elif pemenang:
-        zero_players = [p for p, score in players.items() if score == 0]
+        juara = max(players, key=players.get)
+        sisa_players = {p: s for p, s in players.items() if p != juara}
+        negatif_players = [p for p, s in sisa_players.items() if s < 0]
+        nol_players = [p for p, s in sisa_players.items() if s == 0]
         
-        # ATURAN KHUSUS: Jika ada pemain mencapai 500 dan ada pemain bernilai 0
-        if zero_players:
-            buttons = [[InlineKeyboardButton(f"💀 Pilih {p} Sebagai Kalah", callback_data=f"selectloser_{p}")] for p in zero_players]
+        # Kasus A: Ada pemain bernilai (-) -> Pemain bernilai (-) terendah otomatis kalah
+        if negatif_players:
+            pecundang = min(negatif_players, key=lambda p: players[p])
+            history[pecundang] += 1
+            pesan_akhir = (
+                f"🎉 *GAME OVER!*\n"
+                f"🏆 Pemenang Putaran: *{juara}* ({players[juara]} poin)\n"
+                f"💔 Kalah Putaran Ini: *{pecundang}* ({players[pecundang]} poin) - *Otomatis kalah karena bernilai (-)*"
+            )
+            await finish_round(query, context, chat_id, teks_tampil, pesan_akhir, pecundang)
+            
+        # Kasus B: Sisa SEMUA pemain bernilai 0 -> Pilihan kalah ditentukan secara MANUAL
+        elif len(nol_players) == len(sisa_players):
+            buttons = [[InlineKeyboardButton(f"💀 Pilih {p} Sebagai Kalah", callback_data=f"selectloser_{p}")] for p in nol_players]
             keyboard = InlineKeyboardMarkup(buttons)
             
             teks_pilih = (
                 f"{teks_tampil}\n\n"
-                f"🎉 *ADA PEMAIN MENCAPAI 500+ POIN!*\n"
-                f"⚠️ *Aturan Khusus:* Karena ada pemain yang bernilai *0 poin*, pilih secara manual pemain bernilai 0 yang dinyatakan *KALAH*:"
+                f"🎉 *{juara}* mencapai {players[juara]} poin!\n"
+                f"⚠️ *Aturan Khusus:* Sisa pemain bernilai *0 poin*.\n\n"
+                f"👇 *Pilih secara manual pemain bernilai 0 yang kalah:* "
             )
             await query.edit_message_text(teks_pilih, parse_mode="Markdown", reply_markup=keyboard)
+            
         else:
-            juara = max(players, key=players.get)
-            pecundang = min(players, key=players.get)
+            # Skenario nilai positif lainnya (jika ada)
+            pecundang = min(sisa_players, key=sisa_players.get)
             history[pecundang] += 1
             pesan_akhir = f"🎉 *GAME OVER!*\n🏆 Pemenang Putaran: *{juara}* ({players[juara]} poin)\n💔 Kalah Putaran Ini: *{pecundang}* ({players[pecundang]} poin)"
             await finish_round(query, context, chat_id, teks_tampil, pesan_akhir, pecundang)
+            
+    # KONDISI 3: GAME MASIH BERJALAN TERTIB
     else:
         buttons = [[InlineKeyboardButton(f"👤 {p}", callback_data=f"select_{p}")] for p in players.keys()]
         keyboard = InlineKeyboardMarkup(buttons)
@@ -311,16 +336,30 @@ async def finish_round(query, context, chat_id, teks_tampil, pesan_akhir, pecund
     history = game["history_kalah"]
     
     k_count = history[pecundang]
-    gelar = GELAR_LIST.get(k_count, GELAR_LIST[10])
+    gelar = GELAR_LIST.get(k_count, GELAR_LIST[5])
     pesan_akhir += f"\n\n🏛️ Status {pecundang} sekarang: *{gelar}* (Total kalah: {k_count}x)"
     
-    # Reset poin untuk ronde baru
-    games[chat_id]["players"] = {p: 0 for p in players.keys()}
+    # Cek jika mencapai batas kalah 5x (Level Walikota / Bupati) -> Reset Total Turnamen
+    if k_count >= 5:
+        pesan_akhir += (
+            f"\n\n🚨 *TURNAMEN SELESAI!* 🚨\n"
+            f"Pemain *{pecundang}* telah mencapai kekalahan ke-5 (*{gelar}*)!\n"
+            f"🔄 *Seluruh skor dan status gelar resmi DI-RESET TOTAL dari awal!*"
+        )
+        games[chat_id]["players"] = {p: 0 for p in players.keys()}
+        games[chat_id]["history_kalah"] = {p: 0 for p in players.keys()}
+    else:
+        # Reset poin hanya untuk ronde baru
+        games[chat_id]["players"] = {p: 0 for p in players.keys()}
     
     buttons = [[InlineKeyboardButton(f"👤 {p}", callback_data=f"select_{p}")] for p in players.keys()]
     keyboard = InlineKeyboardMarkup(buttons)
     
-    await query.message.delete()
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+        
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"{teks_tampil}\n\n{pesan_akhir}\n\n🔄 *Ronde Baru Dimulai! Pilih pemain untuk input poin:*",
@@ -343,16 +382,16 @@ async def status_rtrw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Belum ada data permainan.")
         return
     history = games[chat_id]["history_kalah"]
-    teks = "🏛️ *STATUS GELAR DAN JABATAN PEMAIN* (Hingga 10 Tingkat) 🏛️\n\n"
+    teks = "🏛️ *STATUS GELAR DAN JABATAN PEMAIN* (Maksimal Level 5) 🏛️\n\n"
     for p, count in history.items():
-        gelar = GELAR_LIST.get(count, GELAR_LIST[10])
+        gelar = GELAR_LIST.get(count, GELAR_LIST[5])
         teks += f"• {p}: *{gelar}* (Total kalah: {count}x)\n"
     await update.message.reply_text(teks, parse_mode="Markdown")
 
 
 # --- 3. EKSEKUSI UTAMA ---
 if __name__ == '__main__':
-    TOKEN = "8854147147:AAFZ-NokjXUlvzPDhxaw4myHVBLpXPfS210"
+    TOKEN = os.environ.get("BOT_TOKEN", "8854147147:AAFZ-NokjXUlvzPDhxaw4myHVBLpXPfS210")
     
     # Menjalankan server Flask di background
     t = threading.Thread(target=run_flask)
