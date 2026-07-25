@@ -27,7 +27,7 @@ def run_flask():
 GELAR_LIST = {
     0: "Aman",
     1: "RT (Rukun Tetangga)",
-    2: "TOLOL",
+    2: "RW",
     3: "Lurah",
     4: "Camat",
     5: "Walikota / Bupati 👑"
